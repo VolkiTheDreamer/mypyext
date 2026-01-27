@@ -1005,3 +1005,29 @@ def tree_to_code(tree, feature_names):
             print("{}return {}".format(indent, tree_.value[node]))
 
     recurse(0, 1)
+
+def tree_path_for_1sample(tree,features, sample):
+    node_indicator = tree.decision_path(sample)
+    leaf_id = tree.apply(sample)[0]
+
+    feature = tree.tree_.feature
+    threshold = tree.tree_.threshold
+
+    path_nodes = node_indicator.indices[node_indicator.indptr[0]: node_indicator.indptr[1]]
+
+    rules = []
+    for node_id in path_nodes:
+        if node_id == leaf_id:
+            continue
+        f = feature[node_id]
+        thr = threshold[node_id]
+        fname = features[f]
+        val = sample.iloc[0, f]
+        if val <= thr:
+            rules.append(f"{fname} <= {thr:.3f}  (value={val:.3f})")
+        else:
+            rules.append(f"{fname} >  {thr:.3f}  (value={val:.3f})")
+
+    print("\nDecision Path:")
+    for i, r in enumerate(rules, 1):
+        print(f"{i}. {r}")
