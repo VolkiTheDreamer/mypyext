@@ -269,7 +269,10 @@ def get_feature_names_from_columntransformer(ct):
                 #remainders
                 if trName=="remainder":
                     for i in features:
-                        final_features.append(ct.feature_names_in_[i])
+                        if isinstance(i, int):
+                            final_features.append(ct.feature_names_in_[i])
+                        else:
+                            final_features.append(i)
                 #all the others
                 else:
                     for f in features:
