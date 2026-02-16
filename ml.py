@@ -4,6 +4,7 @@ from sklearn.metrics import silhouette_samples, silhouette_score
 from sklearn.metrics import confusion_matrix, accuracy_score, recall_score, precision_score, f1_score
 from sklearn.metrics import roc_curve, precision_recall_curve, auc
 from sklearn.metrics import mean_squared_error,mean_absolute_error,r2_score
+from sklearn.metrics import ConfusionMatrixDisplay
 import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
@@ -338,6 +339,51 @@ def plot_confusion_matrix(cm, classes,
     Depreceated. use 'sklearn.metrics.ConfusionMatrixDisplay(cm).plot();'
     """
     warnings.warn("use 'sklearn.metrics.ConfusionMatrixDisplay(cm).plot();'")      
+
+def plotConfusionMatrixDisplayWithLabels(estimator, X_test, y_test, colorbar=False, normalize="all", values_format=".1%", figsize=(4,4)):
+    fig, ax = plt.subplots(figsize=figsize)
+    cm_display = ConfusionMatrixDisplay.from_estimator(
+        estimator, 
+        X_test, y_test, 
+        colorbar=colorbar, 
+        normalize=normalize,
+        values_format=values_format,
+        ax=ax
+    )
+    plt.grid(False)
+
+    # Confusion matrix values and colormap for contrast-aware text color
+    cm = cm_display.confusion_matrix
+    im = cm_display.im_
+    cmap = im.get_cmap()
+    norm = im.norm
+
+    # Hücrelere yazı ekleme
+    tn, fp, fn, tp = cm[0,0], cm[0,1], cm[1,0], cm[1,1]
+    a=len(X_test)
+    # Her hücreye metin ekle (üst sınıra doğru, %10 padding)
+    for i,j in [[0,0], [0,1], [1,0], [1,1]]:
+        if i == 0 and j == 0:
+            label = f"TN({a*tn:.0f})"
+        elif i == 0 and j == 1:
+            label = f"FP({a*fp:.0f})"
+        elif i == 1 and j == 0:
+            label = f"FN({a*fn:.0f})"
+        else:
+            label = f"TP({a*tp:.0f})"
+
+        # Hücre rengine göre kontrast metin rengi seç
+        r, g, b, _ = cmap(norm(cm[i, j]))
+        luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
+        text_color = "black" if luminance > 0.5 else "white"
+
+        # Y konumunu hücrenin üst sınırına kaydır (%10 padding ile)
+        y_pos = i - 0.4
+
+        ax.text(j, y_pos, label, ha="center", va="top", color=text_color, fontsize=12, weight="bold")
+
+    ax.set_title("Confusion Matrix with Labels")
+    plt.show();    
     
 def CheckForClusteringTendencyWithHopkins(X,random_state=42):    
     """
@@ -658,22 +704,39 @@ def draw_network_graph(ws):
 
     plt.show()
 
-def plotROC(y_test,X_test,estimator,pos_label=1,figsize=(6,6)):
-    cm = confusion_matrix(y_test, estimator.predict(X_test))    
-    fpr, tpr, _ = roc_curve(y_test, estimator.predict_proba(X_test)[:,1],pos_label=pos_label)
-    roc_auc = auc(fpr, tpr) #or roc_auc_score(y_test, y_scores)
+def plotROC(y_test, X_test, estimator, pos_label=1, figsize=(6,6)):
+    """
+    For Optimal point, Youden’s J: tpr - fpr maksimum
+    """
+    y_score = estimator.predict_proba(X_test)[:, 1]
+    fpr, tpr, thresholds = roc_curve(y_test, y_score, pos_label=pos_label)
+    roc_auc = auc(fpr, tpr)
+
+    # Optimal threshold (Youden's J = TPR - FPR)
+    j_scores = tpr - fpr
+    j_idx = np.argmax(j_scores)
+    opt_fpr, opt_tpr, opt_thr = fpr[j_idx], tpr[j_idx], thresholds[j_idx]
+
+    # Default threshold point (usually 0.5)
+    y_pred = estimator.predict(X_test)
+    tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()
+    def_fpr = fp / (fp + tn)
+    def_tpr = tp / (tp + fn)
+
     plt.figure(figsize=figsize)
-    plt.plot(fpr, tpr, label='(ROC-AUC = %0.2f)' % roc_auc)
+    plt.plot(fpr, tpr, label='ROC (AUC = %0.2f)' % roc_auc)
     plt.plot([0, 1], [0, 1], 'k--')
-    tn, fp, fn, tp = [i for i in cm.ravel()]
-    plt.plot(fp/(fp+tn), tp/(tp+fn), 'ro', markersize=8, label='Decision Point(Optimal threshold)')
+
+    plt.plot(def_fpr, def_tpr, 'ro', markersize=7, label='Decision Point (default threshold)')
+    plt.plot(opt_fpr, opt_tpr, 'go', markersize=8, label=f'Optimal (Youden J), thr={opt_thr:.3f}')
+
     plt.xlim([0.0, 1.0])
     plt.ylim([0.0, 1.05])
-    plt.xlabel('False Positive Rate(1-sepecifity)')
-    plt.ylabel('True Positive Rate(Recall/Sensitivity)')
+    plt.xlabel('False Positive Rate (1 - specificity)')
+    plt.ylabel('True Positive Rate (Recall/Sensitivity)')
     plt.title('ROC Curve (TPR vs FPR at each probability threshold)')
     plt.legend(loc="lower right")
-    plt.show();
+    plt.show()    
 
 def plot_precision_recall_curve(y_test_encoded,X_test,estimator,threshs=np.linspace(0.0, 0.98, 40),figsize=(16,6)):
     """
@@ -761,41 +824,59 @@ def find_best_cutoff_for_classification(estimator, y_test_le, X_test, costlist,t
 
 def plot_gain_and_lift(estimator, X_test, y_test, pos_label="Yes", figsize=(16, 6)):
     """
-        y_test as numpy array
-        Prints the gain and lift values and plots the charts.
+    y_test as numpy array
+    Prints the gain and lift values and plots the charts.
     """
+    # Probabilities
     prob_df = pd.DataFrame({"Prob": estimator.predict_proba(X_test)[:, 1]})
     prob_df["label"] = np.where(y_test == pos_label, 1, 0)
-    prob_df = prob_df.sort_values(by="Prob", ascending=False)
 
-    unique_probs = len(prob_df['Prob'].unique())
-    if unique_probs < 10:
-        num_quantiles = min(10, unique_probs)
-        prob_df['Decile'] = pd.qcut(prob_df['Prob'], num_quantiles, labels=False, duplicates='drop')
-    else:
-        prob_df['Decile'] = pd.qcut(prob_df['Prob'], 10, labels=False, duplicates='drop')
+    # Create deciles (0..9), then flip so top scores = decile 1
+    unique_probs = prob_df["Prob"].nunique()
+    n_bins = min(10, unique_probs)
 
-    # Calculate the actual responses in each decile
+    prob_df["Decile"] = pd.qcut(prob_df["Prob"], n_bins, labels=False, duplicates="drop")
+
+    # flip deciles: highest probs -> 1
+    prob_df["Decile"] = (prob_df["Decile"].max() - prob_df["Decile"]) + 1
+
+    # Responses per decile
     try:
-        res = pd.crosstab(prob_df['Decile'], prob_df['label'])[1].reset_index().rename(columns={1: 'Number of Responses'})
+        res = (
+            pd.crosstab(prob_df["Decile"], prob_df["label"])[1]
+            .reset_index()
+            .rename(columns={1: "Number of Responses"})
+        )
     except KeyError:
-        # Handle case where no '1' values are found
-        res = pd.DataFrame({'Decile': prob_df['Decile'].unique(), 'Number of Responses': 0})
-    
-    lg = prob_df['Decile'].value_counts(sort=False).reset_index().rename(columns={'Decile': 'Number of Cases', 'index': 'Decile'})
-    lg = pd.merge(lg, res, on='Decile', how='left').fillna(0).sort_values(by='Decile', ascending=False).reset_index(drop=True)
+        res = pd.DataFrame({"Decile": prob_df["Decile"].unique(), "Number of Responses": 0})
 
-    # Calculate cumulative responses
-    lg['Cumulative Responses'] = lg['Number of Responses'].cumsum()
-    lg['% of Events'] = np.round((lg['Number of Responses'] / lg['Number of Responses'].sum()) * 100, 2)
-    lg['Gain'] = lg['% of Events'].cumsum()
-    lg['Decile'] = lg['Decile'].astype(int)
-    lg['lift'] = np.round((lg['Gain'] / ((lg['Decile'] + 1) * 10)), 2)
+    # Cases per decile
+    lg = (
+        prob_df["Decile"]
+        .value_counts(sort=False)
+        .rename("Number of Cases")
+        .reset_index()
+        .rename(columns={"index": "Decile"})
+    )
+
+    lg = (
+        pd.merge(lg, res, on="Decile", how="left")
+        .fillna(0)
+        .sort_values(by="Decile", ascending=True)
+        .reset_index(drop=True)
+    )
+
+    # Cumulative and lift
+    lg["Cumulative Responses"] = lg["Number of Responses"].cumsum()
+    lg["% of Events"] = np.round((lg["Number of Responses"] / lg["Number of Responses"].sum()) * 100, 2)
+    lg["Gain"] = lg["% of Events"].cumsum()
+    lg["lift"] = np.round((lg["Gain"] / (lg["Decile"] * 10)), 2)
 
     display(lg)
 
     # Plot Lift and Gain Charts
     plt.figure(figsize=figsize)
+
     plt.subplot(121)
     plt.plot(lg["Decile"], lg["lift"], label="Model")
     plt.plot(lg["Decile"], [1 for _ in range(len(lg))], label="Random")
@@ -803,6 +884,7 @@ def plot_gain_and_lift(estimator, X_test, y_test, pos_label="Yes", figsize=(16, 
     plt.legend()
     plt.xlabel("Decile")
     plt.ylabel("Lift")
+    plt.xlim(1, 10)
 
     plt.subplot(122)
     plt.plot(lg["Decile"], lg["Gain"], label="Model")
@@ -811,8 +893,9 @@ def plot_gain_and_lift(estimator, X_test, y_test, pos_label="Yes", figsize=(16, 
     plt.legend()
     plt.xlabel("Decile")
     plt.ylabel("Gain")
-    plt.xlim(0, 11)
+    plt.xlim(1, 10)
     plt.ylim(0, 110)
+
     plt.show()
 
 
